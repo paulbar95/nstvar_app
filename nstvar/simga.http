@@ -1,0 +1,21 @@
+@port = 8080
+@base-url = http://localhost:{{port}}
+@sigma-api = /api/sigma
+
+# Valid Sigma Request (should return value)
+GET http://localhost:8080/api/sigma?aiiType=PM25&region=DE&scenario=SSP585
+Authorization: Basic dXNlcjplMmIyNjQ5Mi1jOTVmLTRlOTAtOWVlNS05Mzc1M2UyZmE0MmM=
+Accept: application/json
+###
+
+# Invalid Sigma Request (missing parameter)
+GET {{base-url}}{{sigma-api}}?aiiType=PM25&region=DEU
+Accept: application/json
+Authorization: Basic dXNlcjoyMDJhZjM1YS0xMmE3LTRkNWItODlhMi1iOWU2YjQwNzIyZjI=
+###
+
+# Invalid Sigma Request (wrong enum)
+GET {{base-url}}{{sigma-api}}?aiiType=WRONG&region=DEU&scenario=SSP1
+Accept: application/json
+Authorization: Basic dXNlcjoyMDJhZjM1YS0xMmE3LTRkNWItODlhMi1iOWU2YjQwNzIyZjI=
+###

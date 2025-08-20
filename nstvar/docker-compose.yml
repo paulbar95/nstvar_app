@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  pm25:
+    build:
+      context: ../pm25_service
+    container_name: pm25-service
+    ports:
+      - "8000:8000"
+#  postgres:
+#    image: postgres:15
+#    container_name: nstvar-postgres
+#    environment:
+#      POSTGRES_USER: nstvar_user
+#      POSTGRES_PASSWORD: secretpassword
+#      POSTGRES_DB: nstvar
+#    ports:
+#      - "5432:5432"
+#    volumes:
+#      - db-data:/var/lib/postgresql/data
+#
+#volumes:
+#  db-data:
