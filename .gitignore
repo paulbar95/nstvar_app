@@ -1,0 +1,22 @@
+# --- project local ---
+/Expose/
+/minio/data/
+
+# Spring Boot / Gradle (unter nstvar)
+# (nur Artefakte, nicht der Quellcode)
+nstvar/.gradle/
+nstvar/build/
+nstvar/out/
+
+# Python (pm25_service)
+pm25_service/.venv/
+pm25_service/**/__pycache__/
+pm25_service/**/*.py[cod]
+pm25_service/.pytest_cache/
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

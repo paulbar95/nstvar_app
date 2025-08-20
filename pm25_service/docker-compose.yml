@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  pm25:
+    build: .
+    ports:
+      - "8000:8000"
+#  springboot:
+#    build: ./nstvar-backend
+#    ports:
+#      - "8080:8080"
+#    depends_on:
+#      - pm25

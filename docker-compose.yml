@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  pm25:
+    build: ./pm25_service
+    container_name: pm25-service
+    ports:
+      - "8000:8000"
+    depends_on:
+      - minio
+      # - sb
+      # - psql
+    environment:
+      - MINIO_ENDPOINT=minio
+      # weitere ENV Variablen...
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+
+  # sb:
+  #   build: ./nstvar-backend
+  #   container_name: sb
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     - psql
+
+  # psql:
+  #   image: postgres:15
+  #   container_name: psql
+  #   environment:
+  #     POSTGRES_USER: nstvar_user
+  #     POSTGRES_PASSWORD: secretpassword
+  #     POSTGRES_DB: nstvar
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - psql-data:/var/lib/postgresql/data
+
+volumes:
+  minio-data:
+  # psql-data:
