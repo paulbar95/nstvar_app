@@ -1,33 +1,36 @@
-import boto3
 import os
 import re
 import json
+from typing import Optional, Dict, Any, List
+from minio import Minio
 
-def index_pm25_data(bucket_name, prefix="", minio_endpoint=None, access_key=None, secret_key=None):
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=minio_endpoint,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-    )
-    response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-    files = response.get('Contents', [])
-    index = []
-    # REGEX pattern wie oben
-    pattern = (
-        r"(?P<var>[^_]+)_"
-        r"(?P<freq>[^_]+)_"
-        r"(?P<model>[^_]+)_"
-        r"(?P<scenario>[^_]+)_"
-        r"(?P<run>[^_]+)_"
-        r"(?P<grid>[^_]+)_"
-        r"(?P<start>\d{6})-(?P<end>\d{6})\.nc"
-    )
-    for f in files:
-        filename = f['Key']
-        m = re.match(pattern, os.path.basename(filename))
-        if m:
-            entry = m.groupdict()
-            entry['file'] = filename
-            index.append(entry)
-    return index
+INDEX_PATH = os.environ.get("PM25_INDEX_PATH", "/app/cache/pm25_index.json")
+
+_KEY_RE = re.compile(
+    r'^(?P<var>[^_]+)_(?P<freq>[^_]+)_(?P<model>[^_]+)_(?P<scenario>[^_]+)'
+    r'_(?P<run>[^_]+)_(?P<grid>[^_]+)_(?P<start>\d{6})-(?P<end>\d{6})\.nc$'
+)
+
+def _parse_key(key: str) -> Optional[Dict[str, Any]]:
+    name = key.split("/")[-1]
+    m = _KEY_RE.match(name)
+    if not m:
+        return None
+    d = m.groupdict()
+    d["key"] = key
+    return d
+
+def index_pm25_data(client: Minio, bucket: str, prefix: str = "") -> int:
+    """Scannt MinIO und schreibt (optional) einen JSON-Index. Gibt die Trefferzahl zurück."""
+    items: List[Dict[str, Any]] = []
+    for obj in client.list_objects(bucket, prefix=prefix, recursive=True):
+        k = obj.object_name
+        if not k.endswith(".nc"):
+            continue
+        parsed = _parse_key(k)
+        if parsed:
+            items.append(parsed)
+    os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
+    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+        json.dump({"files": items, "count": len(items)}, f)
+    return len(items)

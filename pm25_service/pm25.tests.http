@@ -1,0 +1,42 @@
+@host = localhost
+@port = 8000
+@base = http://{{host}}:{{port}}
+
+# ===== Projektweite Defaults =====
+@bucket = pm25data
+# leerer String, wenn kein Prefix benutzt wird
+@prefix = ""
+
+@region = AT
+@scenario = ssp585
+@quantile = 0.95
+@y0 = 2030
+@y1 = 2039
+# =================================
+
+### Health
+GET {{base}}/health
+Accept: application/json
+
+### OpenAPI (zur Kontrolle)
+GET {{base}}/openapi.json
+Accept: application/json
+
+### Reindex (scan MinIO -> schreibe Cache)
+POST {{base}}/api/pm25/files/reindex?bucket={{bucket}}
+Accept: application/json
+
+### Threshold (z. B. 95%-Perzentil)
+GET {{base}}/api/pm25/threshold?scenario={{scenario}}&quantile={{quantile}}
+Accept: application/json
+
+### Region-Wert (einfacher Check)
+GET {{base}}/api/pm25/region?region={{region}}&scenario={{scenario}}
+Accept: application/json
+
+### Region-Schock (Basisjahr 2015, Mittelwert über [y0..y1])
+GET {{base}}/api/pm25/region_shock?region={{region}}&scenario={{scenario}}&start_year={{y0}}&end_year={{y1}}
+Accept: application/json
+
+### Beispiel: anderes Szenario/Fenster
+GET {{base}}/api/pm25/region_shock?region=DE&scenario=ssp126&start_year=20

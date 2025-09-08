@@ -11,7 +11,10 @@ services:
       # - sb
       # - psql
     environment:
-      - MINIO_ENDPOINT=minio
+      - MINIO_BUCKET=pm25data
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
       # weitere ENV Variablen...
 
   minio:
@@ -49,4 +52,5 @@ services:
 
 volumes:
   minio-data:
-  # psql-data:
+    external: true
+    name: master_minio-data
