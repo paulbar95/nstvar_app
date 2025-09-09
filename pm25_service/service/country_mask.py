@@ -1,177 +1,203 @@
 # service/country_mask.py
-import os
 import json
-import urllib.request
-from typing import Dict, Any, List, Tuple
+import os
+import tempfile
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import xarray as xr
-from shapely.geometry import shape, Point
-from shapely.geometry.base import BaseGeometry
+import urllib.request
+from shapely.geometry import shape, Point, Polygon, MultiPolygon
 
 CACHE_DIR = "/app/cache"
-STATIC_DIR = "/app/static"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-DEFAULT_GEOJSON_PATH = os.getenv("COUNTRY_GEOJSON", f"{STATIC_DIR}/ne_110m_admin_0_countries.geojson")
-DEFAULT_GEOJSON_URL  = os.getenv(
-    "COUNTRY_GEOJSON_URL",
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
-)
 DEFAULT_MASK_PATH = os.path.join(CACHE_DIR, "country_mask_1deg.nc")
+DEFAULT_GEOJSON_PATH = os.path.join(CACHE_DIR, "ne_countries_lowres.geojson")
+# Natural Earth v5.1.2 – Admin 0 - Countries (Low resolution, 110m)
+DEFAULT_GEOJSON_URL = (
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+)
 
-# --- interne Version (historisch) ---
-def _target_grid() -> Tuple[np.ndarray, np.ndarray]:
-    # 1°-Grid (lat: -89.5..89.5; lon: 0.5..359.5)
+# ---------- Zielraster (1°) ----------
+def target_grid() -> Tuple[np.ndarray, np.ndarray]:
+    """
+    1°-Raster, wie in threshold_map.py (kompatibel).
+    lat: -89.5..+89.5 (180)
+    lon: 0.5..359.5 (360)
+    """
     lat = np.linspace(-89.5, 89.5, 180)
     lon = np.linspace(0.5, 359.5, 360)
     return lat, lon
 
-# --- öffentlicher Alias, damit validate.py importieren kann ---
-def target_grid() -> Tuple[np.ndarray, np.ndarray]:
-    return _target_grid()
 
-def has_mask(path: str = DEFAULT_MASK_PATH) -> bool:
-    return os.path.exists(path)
+def _download_if_needed(src_url: str, to_path: str) -> str:
+    os.makedirs(os.path.dirname(to_path), exist_ok=True)
+    if not os.path.exists(to_path):
+        urllib.request.urlretrieve(src_url, to_path)
+    return to_path
 
-def ensure_country_mask(path: str = DEFAULT_MASK_PATH) -> str:
-    """
-    Stellt sicher, dass eine Länder-Maske existiert.
-    Aktuell: Fallback-Dummy (leere Strings) – verhindert Crashs, bis die echte
-    Geometrie-Variante aktiv ist. Ersetze das später durch die GeoJSON/regionmask-Logik.
-    """
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    os.makedirs(STATIC_DIR, exist_ok=True)
 
-    if os.path.exists(path):
-        return path
-
-    lat, lon = target_grid()
-    data = xr.DataArray(
-        np.full((lat.size, lon.size), "", dtype=object),
-        dims=("lat", "lon"),
-        coords={"lat": lat, "lon": lon},
-        name="iso_a2",
-    )
-    xr.Dataset({"iso_a2": data}).to_netcdf(path)
-    return path
-
-def _ensure_dirs():
-    os.makedirs(STATIC_DIR, exist_ok=True)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-
-def _download_geojson(url: str, dest: str) -> None:
-    _ensure_dirs()
-    urllib.request.urlretrieve(url, dest)
-
-def _load_geojson(path: str) -> List[Dict[str, Any]]:
+def _load_geojson(path: str) -> Dict:
     with open(path, "r", encoding="utf-8") as f:
-        gj = json.load(f)
-    # FeatureCollection erwartet
-    feats = gj["features"] if "features" in gj else []
-    return feats
+        return json.load(f)
 
-def _iso2_of_feature(feat: Dict[str, Any]) -> str | None:
+
+def _iso2_from_feature(feat: Dict) -> Optional[str]:
+    # Natural Earth Feld-Reihenfolge: bevorzugt ISO_A2_EH, sonst ISO_A2
     props = feat.get("properties", {})
-    # Natural Earth Felder (häufig):
-    for k in ("ISO_A2", "ADM0_A3", "iso_a2", "abbrev"):
-        v = props.get(k)
-        if isinstance(v, str) and len(v) >= 2:
-            code = v[:2].upper()
-            if code.isalpha():
-                return code
-    return None
+    iso2 = props.get("ISO_A2_EH") or props.get("ISO_A2")
+    if not iso2 or iso2 == "-99":
+        return None
+    iso2 = iso2.strip()
+    if len(iso2) != 2:
+        return None
+    # Bsp. 'FR' -> 'FR'
+    return iso2.upper()
 
-def _polygons_from_feature(feat: Dict[str, Any]) -> BaseGeometry:
+
+def _geometry_from_feature(feat: Dict) -> Optional[MultiPolygon | Polygon]:
     geom = feat.get("geometry")
     if not geom:
-        raise ValueError("feature without geometry")
-    return shape(geom)  # shapely Geometry (Polygon/MultiPolygon)
+        return None
+    g = shape(geom)
+    if isinstance(g, (Polygon, MultiPolygon)):
+        return g
+    return None
 
-def build_country_mask(geojson_path: str, mask_path: str) -> Dict[str, Any]:
-    """Rastert Länder-Polygone auf 1°-Grid. Ergebnis:
-       Dataset mit dims: country, lat, lon
-       vars: mask (bool), coord 'country' (ISO2 strings)
+
+def _build_mask_from_geojson(geojson_path: str) -> xr.Dataset:
     """
-    _ensure_dirs()
-    feats = _load_geojson(geojson_path)
+    Rastert Länder-Polygone auf 1°-Raster.
+    Speichert den Länder-Code als "code" (int16) und ein Lookup Mapping (Attr).
+    """
+    lat, lon = target_grid()
+    nlat, nlon = lat.size, lon.size
+    # mask int16; 0 = no country; 1..N = ISO2 index
+    code = np.zeros((nlat, nlon), dtype=np.int16)
 
-    # Sammle Polygone pro ISO2
-    by_iso: dict[str, List[BaseGeometry]] = {}
-    for ft in feats:
-        code = _iso2_of_feature(ft)
-        if not code:
+    data = _load_geojson(geojson_path)
+    features = data.get("features", [])
+
+    # ISO2 -> int index
+    idx_by_iso2: Dict[str, int] = {}
+    next_idx = 1  # 0 = no-data
+
+    # Vorbereite Punkt-Liste je Spalte (lon) – wir erzeugen Points on-the-fly
+    # Bounding Box Filter spart viel Zeit.
+    lon_vals = lon.copy()
+    lat_vals = lat.copy()
+
+    for feat in features:
+        iso2 = _iso2_from_feature(feat)
+        if not iso2:
             continue
-        geom = _polygons_from_feature(ft)
-        by_iso.setdefault(code, []).append(geom)
+        geom = _geometry_from_feature(feat)
+        if geom is None:
+            continue
 
-    lat, lon = _target_grid()
-    nlat, nlon = len(lat), len(lon)
-    countries = sorted(by_iso.keys())
-    nc = len(countries)
+        if iso2 not in idx_by_iso2:
+            idx_by_iso2[iso2] = next_idx
+            next_idx += 1
+        cid = idx_by_iso2[iso2]
 
-    # Output-Array
-    mask = np.zeros((nc, nlat, nlon), dtype=np.bool_)
+        minx, miny, maxx, maxy = geom.bounds
+        # Koordinaten auf 0..360 longitudes bringen, falls GeoJSON bei -180..180 liegt
+        if minx < 0 or maxx <= 180:
+            # wir nehmen an, geometries sind -180..180; bring sie in 0..360
+            def _wrap_x(x):
+                v = (x + 360.0) % 360.0
+                return v
 
-    # Prüfpunkte: Zellzentren (lon 0..360 → für Point-in-Polygon in [-180..180] normalisieren)
-    lon_deg = lon.copy()
-    lon_west_east = np.where(lon_deg > 180.0, lon_deg - 360.0, lon_deg)  # -180..180
+            # bounding box in 0..360
+            minx = _wrap_x(minx)
+            maxx = _wrap_x(maxx)
+            # Achtung: bei Bounding-Box, die den Meridian schneidet, ist das nicht perfekt.
+            # Für Low-Res reicht es – in Zweifelsfällen prüft der "contains" am Ende sauber.
 
-    # Rasterung (einfach: Punkt-in-Polygon am Zellzentrum)
-    for ci, iso in enumerate(countries):
-        # vereinige MultiPolygone dieses Landes
-        geoms = by_iso[iso]
-        # shapely kann Sammlung als unary_union vereinigen (optional)
-        geom_union = geoms[0]
-        for g in geoms[1:]:
-            try:
-                geom_union = geom_union.union(g)
-            except Exception:
-                # robust: wenn union scheitert, nimm beide (contain-check funktioniert auch so)
-                pass
+        # Indexbereiche grob einschränken
+        lat_mask = (lat_vals >= (miny - 1.0)) & (lat_vals <= (maxy + 1.0))
+        if minx <= maxx:
+            lon_mask = (lon_vals >= (minx - 1.0)) & (lon_vals <= (maxx + 1.0))
+            lon_indices = np.where(lon_mask)[0]
+        else:
+            # Wrap-around (selten)
+            lon_mask = (lon_vals >= (minx - 1.0)) | (lon_vals <= (maxx + 1.0))
+            lon_indices = np.where(lon_mask)[0]
 
-        for yi, la in enumerate(lat):
-            for xi, lo in enumerate(lon_west_east):
-                p = Point(float(lo), float(la))
-                if geom_union.contains(p):
-                    mask[ci, yi, xi] = True
+        lat_indices = np.where(lat_mask)[0]
 
-    # als Dataset speichern
+        # Punkt-in-Polygon
+        for ii in lat_indices:
+            y = float(lat_vals[ii])
+            for jj in lon_indices:
+                # schon zugewiesen? wir lassen "erstes" Land gewinnen; reicht für 1° low-res
+                if code[ii, jj] != 0:
+                    continue
+                x = float(lon_vals[jj])
+                p = Point(x, y)
+                if geom.contains(p):
+                    code[ii, jj] = cid
+
+    # Dataset schreiben
+    # Mapping int->ISO2 als JSON-Attribut ablegen
+    inv = {int(v): k for k, v in idx_by_iso2.items()}
     ds = xr.Dataset(
-        data_vars={
-            "mask": (("country", "lat", "lon"), mask),
-        },
-        coords={
-            "country": np.array(countries, dtype=object),  # string-koordinate
-            "lat": lat,
-            "lon": lon,
-        },
-        attrs={
-            "grid": "1deg",
-            "lon_convention": "0..360 (cell centers), selection uses same",
-            "geojson_source": os.path.abspath(geojson_path),
-        },
+        {"code": (("lat", "lon"), code.astype(np.int16))},
+        coords={"lat": lat_vals, "lon": lon_vals},
+        attrs={"iso2_lookup": json.dumps(inv)},
     )
+    return ds
+
+
+def ensure_country_mask(
+        mask_path: str = DEFAULT_MASK_PATH,
+        *,
+        src: Optional[str] = None,        # URL ODER lokaler Pfad (GeoJSON)
+        overwrite: bool = False
+) -> Dict[str, object]:
+    """
+    Stellt sicher, dass eine 1°-Länder-Maske existiert.
+    - Wenn `mask_path` existiert und `overwrite=False` -> nur Metadaten zurück.
+    - Sonst: `src` (URL oder Pfad) verwenden. Fehlt `src`, laden wir Natural Earth Low-Res.
+    """
+    os.makedirs(os.path.dirname(mask_path), exist_ok=True)
+
+    if os.path.exists(mask_path) and not overwrite:
+        ds = xr.open_dataset(mask_path)
+        try:
+            iso_attr = ds.attrs.get("iso2_lookup", "{}")
+            inv = json.loads(iso_attr)
+            return {
+                "path": mask_path,
+                "created": False,
+                "n_countries": len(inv),
+                "shape": [int(ds.dims["lat"]), int(ds.dims["lon"])],
+            }
+        finally:
+            ds.close()
+
+    # Quelle besorgen
+    if src is None:
+        # Standard: Natural Earth
+        geojson_path = _download_if_needed(DEFAULT_GEOJSON_URL, DEFAULT_GEOJSON_PATH)
+    else:
+        if src.startswith("http://") or src.startswith("https://"):
+            geojson_path = _download_if_needed(src, DEFAULT_GEOJSON_PATH)
+        else:
+            geojson_path = src  # lokaler Pfad
+
+    ds_mask = _build_mask_from_geojson(geojson_path)
+    # überschreiben ok
     if os.path.exists(mask_path):
         os.remove(mask_path)
-    ds.to_netcdf(mask_path)
-    ds.close()
+    ds_mask.to_netcdf(mask_path)
 
+    inv = json.loads(ds_mask.attrs.get("iso2_lookup", "{}"))
     return {
-        "mask_path": mask_path,
-        "n_countries": len(countries),
-        "countries": countries[:10],  # Vorschau
+        "path": mask_path,
+        "created": True,
+        "n_countries": len(inv),
+        "shape": [int(ds_mask.dims["lat"]), int(ds_mask.dims["lon"])],
+        "source": geojson_path,
     }
-
-def mask_info(mask_path: str | None = None) -> Dict[str, Any]:
-    p = mask_path or DEFAULT_MASK_PATH
-    if not os.path.exists(p):
-        raise FileNotFoundError(p)
-    ds = xr.open_dataset(p)
-    try:
-        return {
-            "mask_path": p,
-            "dims": {k: int(v) for k, v in ds.sizes.items()},
-            "countries": [str(c) for c in ds["country"].values[:20]],
-        }
-    finally:
-        ds.close()

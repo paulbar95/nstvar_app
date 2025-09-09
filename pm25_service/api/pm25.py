@@ -9,14 +9,13 @@ from minio import Minio
 
 from typing import Optional
 from fastapi import Body
-from service.country_mask import ensure_country_mask, mask_info as mask_info_fn
+from service.country_mask import ensure_country_mask, DEFAULT_MASK_PATH
 
 # falls du region_shock sofort nutzen willst:
 from service.indexer import index_pm25_data         # <— damit kein NameError
 from service.threshold_map import build_threshold_map
 
 from service.threshold_map import build_threshold_map
-from service.country_mask import ensure_country_mask, mask_info as mask_info_fn
 from service.window_field import window_field
 from service.shock import compute_region_shock
 
@@ -35,13 +34,17 @@ def _minio() -> Minio:
 DEFAULT_BUCKET = os.getenv("PM25_BUCKET", "pm25data")
 
 @router.post("/country_mask/ensure")
-def ensure_country_mask_ep(
-        grid: str = Query("1deg"),
-        geojson_path: str | None = Query(None),
-        mask_path: str | None = Query(None),
+def ensure_mask(
+        src: str | None = Query(
+            None,
+            description="Optional: URL oder lokaler Pfad zu einem Countries-GeoJSON. "
+                        "Wenn leer, wird Natural Earth Low-Res automatisch verwendet."
+        ),
+        overwrite: bool = Query(False, description="Vorhandene Maske überschreiben")
 ):
     try:
-        return ensure_country_mask(geojson_path=geojson_path, mask_path=mask_path, grid=grid)
+        res = ensure_country_mask(mask_path=DEFAULT_MASK_PATH, src=src, overwrite=overwrite)
+        return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
