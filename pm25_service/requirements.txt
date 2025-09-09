@@ -2,3 +2,11 @@ fastapi
 uvicorn
 boto3
 minio>=7.2,<8
+numpy
+xarray>=2024.1
+netCDF4
+h5netcdf
+cftime
+pandas
+scipy
+shapely>=2.0

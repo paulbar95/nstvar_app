@@ -40,3 +40,31 @@ Accept: application/json
 
 ### Beispiel: anderes Szenario/Fenster
 GET {{base}}/api/pm25/region_shock?region=DE&scenario=ssp126&start_year=20
+
+### Zellweise Threshold Map (historical 1850-1900)
+GET {{base}}/api/pm25/threshold_map?scenario={{scenario}}&quantile={{quantile}}&basis=historical
+Accept: application/json
+
+### Zellweise Threshold Map (ensemble2015)
+GET {{base}}/api/pm25/threshold_map?scenario={{scenario}}&quantile={{quantile}}&basis=ensemble2015
+Accept: application/json
+
+
+### Mini-Tests
+### 1) Reindex (falls noch nicht)
+POST http://localhost:8000/api/pm25/files/reindex
+
+### 2) Threshold-Map (einmalig je Szenario/Quantil; baut baseline+q)
+GET  http://localhost:8000/api/pm25/threshold_map?scenario=ssp585&quantile=0.95&basis=ensemble2015
+
+### 3) Pineau-konformer Schock (baseline)
+GET  http://localhost:8000/api/pm25/region_shock?region=AT&scenario=ssp585&start_year=2030&end_year=2039&mode=baseline&agg=median&stat=ratio
+
+### 4) Exceedance-Schock (Perzentil)
+GET  http://localhost:8000/api/pm25/region_shock?region=AT&scenario=ssp585&start_year=2030&end_year=2039&mode=percentile&q=0.95&basis=ensemble2015&agg=median&stat=ratio
+
+### Mask and geojson auto-download
+POST http://localhost:8000/api/pm25/country_mask/ensure
+### sus
+GET  http://localhost:8000/api/pm25/country_mask/info
+
