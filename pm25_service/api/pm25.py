@@ -2,20 +2,18 @@ from fastapi import APIRouter, Query, HTTPException
 import os, json  # <— fehlte
 from service.region_value import get_region_value
 from service.threshold import get_threshold
-from service.shock import compute_region_shock
 from service.validate import check_mask_vs_target, check_alignment_with_sample
 from typing import Optional
 from minio import Minio
 
 from typing import Optional
 from fastapi import Body
-from service.country_mask import ensure_country_mask, DEFAULT_MASK_PATH
+from service.country_mask import ensure_country_mask, mask_info, DEFAULT_MASK_PATH
 
 # falls du region_shock sofort nutzen willst:
 from service.indexer import index_pm25_data         # <— damit kein NameError
 from service.threshold_map import build_threshold_map
 
-from service.threshold_map import build_threshold_map
 from service.window_field import window_field
 from service.shock import compute_region_shock
 
@@ -35,48 +33,51 @@ DEFAULT_BUCKET = os.getenv("PM25_BUCKET", "pm25data")
 
 @router.post("/country_mask/ensure")
 def ensure_mask(
-        src: str | None = Query(
-            None,
-            description="Optional: URL oder lokaler Pfad zu einem Countries-GeoJSON. "
-                        "Wenn leer, wird Natural Earth Low-Res automatisch verwendet."
-        ),
-        overwrite: bool = Query(False, description="Vorhandene Maske überschreiben")
+        src: str | None = Query(None, description="Optional: URL oder Pfad zu GeoJSON; sonst Natural Earth"),
+        overwrite: bool = Query(False)
 ):
     try:
-        res = ensure_country_mask(mask_path=DEFAULT_MASK_PATH, src=src, overwrite=overwrite)
-        return res
+        return ensure_country_mask(mask_path=DEFAULT_MASK_PATH, src=src, overwrite=overwrite)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/country_mask/info")
 def country_mask_info():
     try:
-        return mask_info_fn()
+        return mask_info(DEFAULT_MASK_PATH)
     except FileNotFoundError:
-        raise HTTPException(404, "Mask not found. Run POST /api/pm25/country_mask/ensure first.")
+        raise HTTPException(status_code=404, detail="Country mask not found. Run POST /api/pm25/country_mask/ensure.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/region_shock")
 def region_shock(
         region: str = Query(..., min_length=2, max_length=2, description="ISO-3166-1 alpha-2"),
         scenario: str = Query(..., pattern="^(ssp126|ssp245|ssp370|ssp585)$"),
         start_year: int = Query(..., ge=2015, le=2100),
-        end_year: int   = Query(..., ge=2015, le=2100),
+        end_year: int = Query(..., ge=2015, le=2100),
         mode: str = Query("baseline", pattern="^(baseline|percentile)$"),
         q: float = Query(0.95, ge=0.0, le=1.0),
         basis: str = Query("ensemble2015"),
-        agg: str = Query("median", pattern="^(median|mean)$"),
-        stat: str = Query("ratio", pattern="^(ratio|delta)$"),
+        agg: str = Query("median", pattern="^(mean|median)$"),
+        stat: str = Query("ratio", pattern="^(ratio|diff)$"),
         bucket: str = Query(DEFAULT_BUCKET),
 ):
     try:
         client = _minio()
-        res = compute_region_shock(
-            client=client, bucket=bucket,
-            region_iso2=region, scenario=scenario,
-            y0=start_year, y1=end_year,
-            mode=mode, q=q, basis=basis, agg=agg, stat=stat,
+        return compute_region_shock(
+            client=client,
+            bucket=bucket,
+            alpha2=region,
+            scenario=scenario,
+            y0=start_year,
+            y1=end_year,
+            mode=mode, q=q, basis=basis,
+            agg=agg, stat=stat,
+            mask_path=DEFAULT_MASK_PATH,
         )
-        return res
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
