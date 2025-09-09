@@ -10,3 +10,5 @@ cftime
 pandas
 scipy
 shapely>=2.0
+dask[array]>=2024.5.0
+toolz>=0.12
