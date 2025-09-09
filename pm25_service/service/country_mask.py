@@ -17,13 +17,43 @@ DEFAULT_GEOJSON_URL  = os.getenv(
     "COUNTRY_GEOJSON_URL",
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
 )
-DEFAULT_MASK_PATH    = os.getenv("COUNTRY_MASK_NC", f"{CACHE_DIR}/country_mask_1deg_v1.nc")
+DEFAULT_MASK_PATH = os.path.join(CACHE_DIR, "country_mask_1deg.nc")
 
+# --- interne Version (historisch) ---
 def _target_grid() -> Tuple[np.ndarray, np.ndarray]:
-    # exakt wie in threshold_map.py
+    # 1°-Grid (lat: -89.5..89.5; lon: 0.5..359.5)
     lat = np.linspace(-89.5, 89.5, 180)
-    lon = np.linspace(0.5, 359.5, 360)  # 0..360
+    lon = np.linspace(0.5, 359.5, 360)
     return lat, lon
+
+# --- öffentlicher Alias, damit validate.py importieren kann ---
+def target_grid() -> Tuple[np.ndarray, np.ndarray]:
+    return _target_grid()
+
+def has_mask(path: str = DEFAULT_MASK_PATH) -> bool:
+    return os.path.exists(path)
+
+def ensure_country_mask(path: str = DEFAULT_MASK_PATH) -> str:
+    """
+    Stellt sicher, dass eine Länder-Maske existiert.
+    Aktuell: Fallback-Dummy (leere Strings) – verhindert Crashs, bis die echte
+    Geometrie-Variante aktiv ist. Ersetze das später durch die GeoJSON/regionmask-Logik.
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(STATIC_DIR, exist_ok=True)
+
+    if os.path.exists(path):
+        return path
+
+    lat, lon = target_grid()
+    data = xr.DataArray(
+        np.full((lat.size, lon.size), "", dtype=object),
+        dims=("lat", "lon"),
+        coords={"lat": lat, "lon": lon},
+        name="iso_a2",
+    )
+    xr.Dataset({"iso_a2": data}).to_netcdf(path)
+    return path
 
 def _ensure_dirs():
     os.makedirs(STATIC_DIR, exist_ok=True)
@@ -145,21 +175,3 @@ def mask_info(mask_path: str | None = None) -> Dict[str, Any]:
         }
     finally:
         ds.close()
-
-def ensure_country_mask(geojson_path: str | None = None,
-                        mask_path: str | None = None,
-                        grid: str = "1deg") -> Dict[str, Any]:
-    """Auto-Download GeoJSON (falls fehlt) + Maske bauen (falls fehlt)."""
-    _ensure_dirs()
-    gj = geojson_path or DEFAULT_GEOJSON_PATH
-    mk = mask_path or DEFAULT_MASK_PATH
-
-    if not os.path.exists(gj):
-        if not DEFAULT_GEOJSON_URL:
-            raise FileNotFoundError(f"GeoJSON not found and no COUNTRY_GEOJSON_URL set: {gj}")
-        _download_geojson(DEFAULT_GEOJSON_URL, gj)
-
-    if not os.path.exists(mk):
-        build_country_mask(gj, mk)
-
-    return mask_info(mk)

@@ -10,7 +10,7 @@ from minio import Minio
 CACHE_DIR = "/app/cache"
 INDEX_JSON = os.path.join(CACHE_DIR, "pm25_index.json")
 
-from service.country_mask import target_grid, DEFAULT_MASK_PATH
+from service.country_mask import target_grid, DEFAULT_MASK_PATH, ensure_country_mask
 
 # ---------- kleine Hilfen ----------
 
